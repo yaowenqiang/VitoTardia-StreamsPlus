@@ -1,0 +1,114 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Markdown Tree Converter
+ * 
+ * Recursive converts all markdown files from a source directory to HTML
+ * and places them in the destination directory recreating the structure
+ * of the source and applying a template parser.
+ */
+
+// Composer autoloader
+require_once dirname(__FILE__) . '/vendor/autoload.php';
+
+
+// Deals with command-line input arguments
+function usage()
+{
+    printf(
+        "Usage: %s -i %s -o %s\n",
+        basename(__FILE__),
+        '/path/to/sourcedir',
+        '/path/to/destdir'
+    );
+}
+
+if (5 > $argc) {
+    usage();
+    exit;
+}
+
+$in = array_search('-i', $argv);
+$src = realpath($argv[$in+1]);
+if (!is_dir($src) || !is_readable($src)) {
+    echo "[ERROR] Invalild source directory.\n";
+    usage();
+    exit(1);
+}
+
+$out = array_search('-o', $argv);
+$dest = realpath($argv[$out+1]);
+if (!is_dir($dest) || !is_writeable($dest)) {
+    echo "[ERROR] Invalild destination directory.\n";
+    usage();
+    exit(1);
+}
+
+// Register custom read-time MarkdownFilter
+stream_filter_register("markdown", "\MarkdownFilter\MarkdownFilter")
+    or die("Failed to register filter Markdown");
+
+// Register custom write-time TemplateFilter
+stream_filter_register("template.*", "\TemplateFilter\TemplateFilter")
+    or die("Failed to register filter Template");
+
+// Load directory iterator for source
+$it = new RecursiveIteratorIterator(
+    new RecursiveDirectoryIterator($src),
+    RecursiveIteratorIterator::SELF_FIRST
+);
+
+// For every valid item
+while ($it->valid()) {
+    
+    // Exclude dot items (., ..)
+    if (!$it->isDot()) {
+
+        // If current item is a directory, the same empty directory
+        // is created on destination
+        if ($it->isDir()) {
+            $path = $dest . '/' . $it->getFileName();
+            if ((!@is_dir($path)) && !@mkdir($path, 0777, true)) {
+                echo "Unable to create folder {$path}\n";
+                exit(1);
+            }
+        }
+
+        // If current item is a markdown (*.md) file it's processed and
+        // saved at the coresponding destination path
+        if ($it->isFile() && 'md' == $it->getExtension()) {
+            $path = $it->key();
+            if (!is_readable($path)) {
+                echo "Unable to read file {$path}\n";
+                exit(2);
+            }
+
+            $content = file_get_contents(
+                'php://filter/read=markdown/resource=file://' . $path
+            );
+            if (false === $content) {
+                echo "Unable to read from source '" . $path . "'\n";
+                exit(3);
+            }
+
+            $pathinfo = pathinfo($dest . '/' . $it->getSubPathName());
+            $target = $pathinfo['dirname']
+                . '/' . $pathinfo['filename'] . '.html';
+
+            $result = file_put_contents(
+                'php://filter/write=template.' .
+                base64_encode(basename($path)) . '/resource=file://' . $target,
+                $content
+            );
+            if (false === $result) {
+                echo "Unable to write file '" . $target . "'\n";
+                exit(4);
+            }
+
+        }
+    }
+    
+    $it->next();
+}
+
+exit(0);
